@@ -176,6 +176,8 @@ if uploaded_file:
                     should_analyze = (frame_id % 2 == 0)
                     
                     current_height_m = 0
+                    ball_info = None  # Zainicjalizuj tutaj
+                    ball_speed = 0
                     
                     if should_analyze:
                         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -236,7 +238,6 @@ if uploaded_file:
                         
                         # Detekcja piłki
                         ball_info = detect_ball(frame)
-                        ball_speed = 0
                         
                         if ball_info:
                             bx, by, br = ball_info
@@ -386,5 +387,6 @@ if uploaded_file:
                     'Wysokość (m)': df['height_m']
                 })
                 st.line_chart(chart_data.set_index('Czas (s)'))
+
 
 
