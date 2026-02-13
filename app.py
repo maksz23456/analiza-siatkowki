@@ -3,8 +3,8 @@ import cv2
 import numpy as np
 import tempfile
 import mediapipe as mp
-from collections import deque
 import math
+import os
 
 # ==========================================
 # MEDIAPIPE
@@ -30,18 +30,14 @@ def rotate_image(image, angle):
 def detect_ball(frame):
     """Wykrywa białą piłkę na obrazie"""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    
-    # Zakres dla białego koloru
     lower_white = np.array([0, 0, 200])
     upper_white = np.array([180, 30, 255])
-    
     mask = cv2.inRange(hsv, lower_white, upper_white)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     if contours:
         largest_contour = max(contours, key=cv2.contourArea)
         area = cv2.contourArea(largest_contour)
-        
         if area > 80:
             M = cv2.moments(largest_contour)
             if M["m00"] != 0:
@@ -49,7 +45,6 @@ def detect_ball(frame):
                 cy = int(M["m01"] / M["m00"])
                 radius = int(math.sqrt(area / math.pi))
                 return (cx, cy, radius)
-    
     return None
 
 def calculate_distance(p1, p2):
@@ -63,25 +58,20 @@ def pixels_to_meters(pixels, reference_height_px, reference_height_m):
     return (pixels / reference_height_px) * reference_height_m
 
 def is_ball_in_court(ball_x, ball_y, frame_width, frame_height):
-    """
-    Sprawdza czy piłka wylądowała w polu czy aucie
-    Zakładamy że pole to środkowa część kadru
-    """
-    # Definiujemy pole jako środkowe 70% szerokości i dolne 40% wysokości
+    """Sprawdza czy piłka wylądowała w polu czy aucie"""
     court_left = frame_width * 0.15
     court_right = frame_width * 0.85
     court_top = frame_height * 0.6
     
     if court_left <= ball_x <= court_right and ball_y >= court_top:
-        return True  # W polu
-    return False  # Aut
+        return True
+    return False
 
 # ==========================================
 # INTERFEJS
 # ==========================================
 st.title("🏐 Profesjonalna Analiza Skoku Siatkarskiego")
 
-# Ustawienia kalibracji
 st.sidebar.header("⚙️ Kalibracja")
 player_height_m = st.sidebar.number_input(
     "Wzrost zawodnika (metry)", 
@@ -109,8 +99,7 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
-    # Zapis pliku
-    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
     tfile.write(uploaded_file.read())
     tfile.close()
     
@@ -121,16 +110,34 @@ if uploaded_file:
     st.info(f"📹 Wideo: {total_frames} klatek, {fps} FPS")
     
     # ==========================================
-    # PRZETWARZANIE WIDEO I ZAPISYWANIE KLATEK
+    # PRZETWARZANIE WIDEO
     # ==========================================
-    if 'processed_frames' not in st.session_state:
-        st.write("🔄 Przetwarzanie wideo...")
+    if 'processed_video_path' not in st.session_state or st.session_state.get('uploaded_file_id') != id(uploaded_file):
+        st.write("🔄 Przetwarzanie wideo... To może potrwać chwilę.")
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        frames_data = []
-        ball_positions = []
+        # Przygotuj wyjściowe wideo
+        output_path = tempfile.mktemp(suffix='.mp4')
+        
+        # Odczytaj pierwszą klatkę dla wymiarów
+        ret, first_frame = cap.read()
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        
+        if rotation > 0:
+            first_frame = rotate_image(first_frame, rotation)
+        
+        original_h, original_w = first_frame.shape[:2]
+        target_w = 640
+        target_h = int(original_h * (target_w / original_w))
+        
+        # VideoWriter
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (target_w, target_h))
+        
+        # Dane do analizy
         height_data = []
-        
+        ball_positions = []
         min_hip_y = 1.0
         player_height_px = None
         ball_hit_point = None
@@ -144,6 +151,7 @@ if uploaded_file:
         ) as pose:
             frame_id = 0
             prev_ball_pos = None
+            all_ball_positions = []
             
             while cap.isOpened():
                 ret, frame = cap.read()
@@ -152,22 +160,14 @@ if uploaded_file:
                 
                 frame_id += 1
                 
-                # Przetwarzaj co 2 klatkę
-                if frame_id % 2 != 0:
-                    continue
-                
                 # Obrót
                 if rotation > 0:
                     frame = rotate_image(frame, rotation)
                 
-                # Zmień rozmiar zachowując proporcje
-                original_h, original_w = frame.shape[:2]
-                target_w = 640
-                target_h = int(original_h * (target_w / original_w))
+                # Resize
                 frame = cv2.resize(frame, (target_w, target_h))
                 h, w = frame.shape[:2]
                 
-                # Kopia do zapisu
                 display_frame = frame.copy()
                 
                 # Analiza pozy
@@ -176,44 +176,37 @@ if uploaded_file:
                 
                 current_height_px = 0
                 current_height_m = 0
+                hand_x, hand_y = 0, 0
                 
                 if results.pose_landmarks:
                     landmarks = results.pose_landmarks.landmark
                     
-                    # Wysokość bioder
+                    # Wysokość
                     left_hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
                     right_hip = landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
                     hip_y = (left_hip.y + right_hip.y) / 2
                     
-                    # Wysokość głowy i stóp (do kalibracji)
+                    # Kalibracja
                     nose = landmarks[mp_pose.PoseLandmark.NOSE]
                     left_ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE]
                     right_ankle = landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE]
                     ankle_y = (left_ankle.y + right_ankle.y) / 2
                     
-                    # Oblicz wysokość zawodnika w pikselach (od stóp do głowy)
                     if player_height_px is None:
                         player_height_px = int((ankle_y - nose.y) * h)
                     
-                    # Zapisz maksymalną wysokość
                     if hip_y < min_hip_y:
                         min_hip_y = hip_y
                     
-                    # Wysokość w pikselach i metrach
                     current_height_px = int((1 - hip_y) * h)
-                    current_height_m = pixels_to_meters(
-                        current_height_px, 
-                        player_height_px, 
-                        player_height_m
-                    )
+                    current_height_m = pixels_to_meters(current_height_px, player_height_px, player_height_m)
                     
                     height_data.append({
                         'frame': frame_id,
-                        'height_px': current_height_px,
                         'height_m': current_height_m
                     })
                     
-                    # Rysowanie szkieletu
+                    # Szkielet
                     if show_skeleton:
                         mp_drawing.draw_landmarks(
                             display_frame,
@@ -223,7 +216,7 @@ if uploaded_file:
                             mp_drawing.DrawingSpec(color=(0,0,255), thickness=2)
                         )
                     
-                    # Punkt ręki
+                    # Ręka
                     right_hand = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST]
                     left_hand = landmarks[mp_pose.PoseLandmark.LEFT_WRIST]
                     hand_x = int(((right_hand.x + left_hand.x) / 2) * w)
@@ -235,49 +228,88 @@ if uploaded_file:
                 
                 if ball_info:
                     bx, by, br = ball_info
-                    ball_positions.append({'frame': frame_id, 'x': bx, 'y': by, 'r': br})
+                    all_ball_positions.append((bx, by))
                     
-                    # Oblicz prędkość
                     if prev_ball_pos:
                         distance = calculate_distance(prev_ball_pos, (bx, by))
-                        ball_speed = distance * fps / 2
+                        ball_speed = distance * fps
                         if ball_speed > max_ball_speed:
                             max_ball_speed = ball_speed
                     
                     prev_ball_pos = (bx, by)
                     
-                    # Wykryj moment uderzenia
+                    # Uderzenie
                     if results.pose_landmarks and ball_hit_point is None:
                         dist_to_hand = calculate_distance((bx, by), (hand_x, hand_y))
                         if dist_to_hand < 60:
-                            ball_hit_point = {'frame': frame_id, 'x': bx, 'y': by}
+                            ball_hit_point = (bx, by)
                     
-                    # Wykryj lądowanie
+                    # Lądowanie
                     if by > h * 0.80 and ball_land_point is None:
-                        ball_land_point = {'frame': frame_id, 'x': bx, 'y': by}
+                        ball_land_point = (bx, by)
                         ball_in_court = is_ball_in_court(bx, by, w, h)
-                else:
-                    ball_positions.append(None)
+                
+                # Rysuj trajektorię (wszystkie pozycje do tej pory)
+                if len(all_ball_positions) > 1:
+                    for i in range(1, len(all_ball_positions)):
+                        cv2.line(display_frame, all_ball_positions[i-1], all_ball_positions[i], 
+                                (255, 255, 0), 3)
+                
+                # Rysuj aktualną piłkę
+                if ball_info:
+                    cv2.circle(display_frame, (bx, by), br, (0, 255, 255), 3)
+                    cv2.circle(display_frame, (bx, by), 3, (0, 0, 255), -1)
+                
+                # Punkt uderzenia
+                if ball_hit_point:
+                    cv2.drawMarker(display_frame, ball_hit_point, (0, 255, 0), 
+                                  cv2.MARKER_STAR, 30, 4)
+                    cv2.putText(display_frame, "UDERZ.", 
+                               (ball_hit_point[0]+15, ball_hit_point[1]), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                
+                # Punkt lądowania
+                if ball_land_point:
+                    color = (0, 255, 0) if ball_in_court else (0, 0, 255)
+                    text = "POLE" if ball_in_court else "AUT"
+                    cv2.drawMarker(display_frame, ball_land_point, color, 
+                                  cv2.MARKER_STAR, 30, 4)
+                    cv2.putText(display_frame, text, 
+                               (ball_land_point[0]+15, ball_land_point[1]), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+                
+                # Pole (wizualizacja)
+                court_left = int(w * 0.15)
+                court_right = int(w * 0.85)
+                court_top = int(h * 0.6)
+                cv2.rectangle(display_frame, (court_left, court_top), (court_right, h), 
+                             (0, 255, 0), 2)
+                
+                # Info na ekranie
+                info_y = 30
+                cv2.putText(display_frame, f"Wysokosc: {current_height_m:.2f}m", 
+                           (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                
+                if ball_speed > 0:
+                    cv2.putText(display_frame, f"Predkosc: {int(ball_speed)} px/s", 
+                               (10, info_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
                 
                 # Zapisz klatkę
-                frames_data.append({
-                    'frame': display_frame.copy(),
-                    'height_px': current_height_px,
-                    'height_m': current_height_m,
-                    'ball_speed': ball_speed
-                })
+                out.write(display_frame)
                 
                 # Progress
                 progress = frame_id / total_frames
                 progress_bar.progress(progress)
+                status_text.text(f"Przetwarzanie: {int(progress*100)}%")
             
             progress_bar.progress(1.0)
+            status_text.text("✅ Gotowe!")
         
         cap.release()
+        out.release()
         
         # Zapisz do session_state
-        st.session_state.processed_frames = frames_data
-        st.session_state.ball_positions = ball_positions
+        st.session_state.processed_video_path = output_path
         st.session_state.height_data = height_data
         st.session_state.player_height_px = player_height_px
         st.session_state.ball_hit_point = ball_hit_point
@@ -286,15 +318,18 @@ if uploaded_file:
         st.session_state.max_ball_speed = max_ball_speed
         st.session_state.min_hip_y = min_hip_y
         st.session_state.fps = fps
+        st.session_state.frame_height = target_h
+        st.session_state.uploaded_file_id = id(uploaded_file)
         
         st.experimental_rerun()
     
     # ==========================================
-    # ODTWARZANIE Z KONTROLKAMI
+    # WYŚWIETLANIE WYNIKÓW
     # ==========================================
-    if 'processed_frames' in st.session_state:
-        frames_data = st.session_state.processed_frames
-        ball_positions = st.session_state.ball_positions
+    if 'processed_video_path' in st.session_state:
+        st.success("✅ Wideo przetworzone!")
+        
+        # Metryki
         height_data = st.session_state.height_data
         player_height_px = st.session_state.player_height_px
         ball_hit_point = st.session_state.ball_hit_point
@@ -303,146 +338,24 @@ if uploaded_file:
         max_ball_speed = st.session_state.max_ball_speed
         min_hip_y = st.session_state.min_hip_y
         fps = st.session_state.fps
+        frame_height = st.session_state.frame_height
         
-        st.success("✅ Wideo przetworzone!")
-        
-        # Metryki końcowe
-        max_height_px = int((1 - min_hip_y) * frames_data[0]['frame'].shape[0])
+        max_height_px = int((1 - min_hip_y) * frame_height)
         max_height_m = pixels_to_meters(max_height_px, player_height_px, player_height_m)
         
         col1, col2, col3 = st.columns(3)
-        col1.metric("🏐 Max wysokość skoku", f"{max_height_m:.2f} m ({max_height_px} px)")
+        col1.metric("🏐 Max wysokość skoku", f"{max_height_m:.2f} m")
         col2.metric("⚡ Max prędkość piłki", f"{int(max_ball_speed)} px/s")
         
         if ball_land_point:
             status = "🟢 W POLU" if ball_in_court else "🔴 AUT"
             col3.metric("🎯 Lądowanie piłki", status)
         
-        # Kontrolki odtwarzania
-        st.subheader("🎬 Odtwarzanie")
+        # Odtwarzanie wideo
+        st.subheader("🎬 Wideo z analizą")
+        st.video(st.session_state.processed_video_path)
         
-        # Inicjalizacja stanu odtwarzania
-        if 'current_frame' not in st.session_state:
-            st.session_state.current_frame = 0
-        if 'is_playing' not in st.session_state:
-            st.session_state.is_playing = False
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        if col1.button("⏮️ Początek"):
-            st.session_state.current_frame = 0
-            st.session_state.is_playing = False
-        
-        if col2.button("◀️ -10"):
-            st.session_state.current_frame = max(0, st.session_state.current_frame - 10)
-            st.session_state.is_playing = False
-        
-        # Play/Pause
-        if st.session_state.is_playing:
-            if col3.button("⏸️ Pauza"):
-                st.session_state.is_playing = False
-        else:
-            if col3.button("▶️ Play"):
-                st.session_state.is_playing = True
-        
-        if col4.button("▶️ +10"):
-            st.session_state.current_frame = min(len(frames_data) - 1, st.session_state.current_frame + 10)
-            st.session_state.is_playing = False
-        
-        if col5.button("⏭️ Koniec"):
-            st.session_state.current_frame = len(frames_data) - 1
-            st.session_state.is_playing = False
-        
-        # Suwak (tylko do manualnego wyboru)
-        manual_frame = st.slider(
-            "Klatka (możesz przewinąć ręcznie)",
-            0,
-            len(frames_data) - 1,
-            st.session_state.current_frame
-        )
-        
-        # Jeśli użytkownik przewinął suwak - zatrzymaj autoplay
-        if manual_frame != st.session_state.current_frame:
-            st.session_state.current_frame = manual_frame
-            st.session_state.is_playing = False
-        
-        frame_idx = st.session_state.current_frame
-        
-        # Pobierz aktualną klatkę
-        current_data = frames_data[frame_idx]
-        display_frame = current_data['frame'].copy()
-        h, w = display_frame.shape[:2]
-        
-        # Rysuj trajektorię piłki (wszystkie pozycje do tej klatki)
-        trajectory_points = []
-        for i, ball_pos in enumerate(ball_positions[:frame_idx + 1]):
-            if ball_pos:
-                trajectory_points.append((ball_pos['x'], ball_pos['y']))
-        
-        # Rysuj trajektorię
-        if len(trajectory_points) > 1:
-            for i in range(1, len(trajectory_points)):
-                cv2.line(display_frame, trajectory_points[i-1], trajectory_points[i], 
-                        (255, 255, 0), 3)
-        
-        # Rysuj aktualną pozycję piłki
-        if ball_positions[frame_idx]:
-            ball = ball_positions[frame_idx]
-            cv2.circle(display_frame, (ball['x'], ball['y']), ball['r'], (0, 255, 255), 3)
-            cv2.circle(display_frame, (ball['x'], ball['y']), 3, (0, 0, 255), -1)
-        
-        # Zaznacz punkt uderzenia
-        if ball_hit_point and frame_idx >= ball_hit_point['frame']:
-            cv2.drawMarker(display_frame, (ball_hit_point['x'], ball_hit_point['y']), 
-                          (0, 255, 0), cv2.MARKER_STAR, 30, 4)
-            cv2.putText(display_frame, "UDERZ.", 
-                       (ball_hit_point['x']+15, ball_hit_point['y']), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        
-        # Zaznacz punkt lądowania
-        if ball_land_point and frame_idx >= ball_land_point['frame']:
-            color = (0, 255, 0) if ball_in_court else (0, 0, 255)
-            text = "POLE" if ball_in_court else "AUT"
-            cv2.drawMarker(display_frame, (ball_land_point['x'], ball_land_point['y']), 
-                          color, cv2.MARKER_STAR, 30, 4)
-            cv2.putText(display_frame, text, 
-                       (ball_land_point['x']+15, ball_land_point['y']), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-        
-        # Rysuj pole (wizualizacja)
-        court_left = int(w * 0.15)
-        court_right = int(w * 0.85)
-        court_top = int(h * 0.6)
-        cv2.rectangle(display_frame, (court_left, court_top), (court_right, h), 
-                     (0, 255, 0), 2)
-        
-        # Info na ekranie
-        info_y = 30
-        cv2.putText(display_frame, f"Wysokosc: {current_data['height_m']:.2f}m ({current_data['height_px']}px)", 
-                   (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        if current_data['ball_speed'] > 0:
-            cv2.putText(display_frame, f"Predkosc: {int(current_data['ball_speed'])} px/s", 
-                       (10, info_y + 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-        
-        cv2.putText(display_frame, f"Klatka: {frame_idx + 1}/{len(frames_data)}", 
-                   (10, info_y + 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-        # Wyświetl
-        st.image(cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB), use_column_width=True)
-        
-        # Auto-advance jeśli odtwarzanie jest włączone
-        if st.session_state.is_playing:
-            if st.session_state.current_frame < len(frames_data) - 1:
-                st.session_state.current_frame += 1
-                import time
-                time.sleep(1.0 / fps)  # Opóźnienie odpowiadające FPS
-                st.experimental_rerun()
-            else:
-                # Koniec filmu - zatrzymaj
-                st.session_state.is_playing = False
-        
-        # Wykres wysokości
+        # Wykres
         st.subheader("📊 Wykres wysokości skoku w czasie")
         import pandas as pd
         df = pd.DataFrame(height_data)
@@ -454,7 +367,18 @@ if uploaded_file:
         })
         st.line_chart(chart_data.set_index('Czas (s)'))
         
-        # Przycisk do ponownego przetworzenia
-        if st.button("🔄 Przetwórz ponownie"):
-            del st.session_state.processed_frames
+        st.info("""
+        💡 **Jak interpretować wyniki:**
+        - **Wysokość skoku**: maksymalna wysokość bioder w metrach
+        - **Prędkość piłki**: szybkość ruchu piłki
+        - **Trajektoria**: żółta linia pokazuje lot piłki
+        - **Punkty**: zielony = uderzenie, zielony/czerwony = lądowanie (pole/aut)
+        - **Zielony prostokąt**: strefa pola gry
+        """)
+        
+        # Reset
+        if st.button("🔄 Przetwórz nowe wideo"):
+            if os.path.exists(st.session_state.processed_video_path):
+                os.remove(st.session_state.processed_video_path)
+            del st.session_state.processed_video_path
             st.experimental_rerun()
