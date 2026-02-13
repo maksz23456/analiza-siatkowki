@@ -287,7 +287,7 @@ if uploaded_file:
         st.session_state.min_hip_y = min_hip_y
         st.session_state.fps = fps
         
-        st.rerun()
+        st.experimental_rerun()
     
     # ==========================================
     # ODTWARZANIE Z KONTROLKAMI
@@ -417,4 +417,4 @@ if uploaded_file:
         # Przycisk do ponownego przetworzenia
         if st.button("🔄 Przetwórz ponownie"):
             del st.session_state.processed_frames
-            st.rerun()
+            st.experimental_rerun()
