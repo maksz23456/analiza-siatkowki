@@ -406,6 +406,27 @@ if page == "📊 Nowa Analiza":
                 cap.release()
                 out.release()  # WAŻNE: zamknij VideoWriter
                 
+                # KONWERSJA DO FORMATU KOMPATYBILNEGO Z PRZEGLĄDARKĄ
+                # Użyj ffmpeg do re-encodowania
+                output_path_web = output_path.replace('.mp4', '_web.mp4')
+                
+                import subprocess
+                try:
+                    # ffmpeg konwersja do H.264 z yuv420p (najbardziej kompatybilne)
+                    subprocess.run([
+                        'ffmpeg', '-i', output_path,
+                        '-vcodec', 'libx264',
+                        '-pix_fmt', 'yuv420p',
+                        '-y',  # overwrite
+                        output_path_web
+                    ], check=True, capture_output=True)
+                    
+                    # Użyj przekonwertowanego wideo
+                    if os.path.exists(output_path_web) and os.path.getsize(output_path_web) > 0:
+                        output_path = output_path_web
+                except Exception as e:
+                    st.warning(f"Nie udało się użyć ffmpeg, próbuję oryginalnego pliku. Error: {e}")
+                
                 # Oblicz metryki
                 if height_data:
                     max_height_m = max([d['height_m'] for d in height_data])
@@ -445,10 +466,28 @@ if page == "📊 Nowa Analiza":
                     
                     # Sprawdź czy plik istnieje i ma rozmiar
                     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                        # Odczytaj plik i wyświetl przez st.video
+                        # Wyświetl informacje o pliku
+                        file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                        st.info(f"📹 Plik wideo: {file_size_mb:.2f} MB")
+                        
+                        # Odczytaj plik
                         with open(output_path, 'rb') as video_file:
                             video_bytes = video_file.read()
+                        
+                        # Próbuj wyświetlić
+                        try:
                             st.video(video_bytes)
+                        except Exception as e:
+                            st.error(f"Nie można wyświetlić wideo: {e}")
+                            st.info("💡 Użyj przycisku poniżej aby pobrać wideo i obejrzeć lokalnie")
+                        
+                        # ZAWSZE daj opcję pobrania
+                        st.download_button(
+                            label="⬇️ Pobierz wideo z analizą",
+                            data=video_bytes,
+                            file_name=f"{player_name}_{action_type}_{analysis_id}.mp4",
+                            mime="video/mp4"
+                        )
                     else:
                         st.error("⚠️ Nie udało się zapisać wideo. Spróbuj ponownie.")
                     
