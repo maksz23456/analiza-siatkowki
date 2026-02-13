@@ -112,7 +112,10 @@ if uploaded_file:
     # ==========================================
     # PRZETWARZANIE WIDEO
     # ==========================================
-    if 'processed_video_path' not in st.session_state or st.session_state.get('uploaded_file_id') != id(uploaded_file):
+    # Unikalny identyfikator pliku
+    file_key = f"{uploaded_file.name}_{uploaded_file.size}_{rotation}_{show_skeleton}"
+    
+    if 'processed_video_path' not in st.session_state or st.session_state.get('file_key') != file_key:
         st.write("🔄 Przetwarzanie wideo... To może potrwać chwilę.")
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -319,14 +322,16 @@ if uploaded_file:
         st.session_state.min_hip_y = min_hip_y
         st.session_state.fps = fps
         st.session_state.frame_height = target_h
-        st.session_state.uploaded_file_id = id(uploaded_file)
+        st.session_state.file_key = file_key
         
-        st.experimental_rerun()
+        # NIE rób rerun - po prostu kontynuuj do wyświetlania
+        progress_bar.empty()
+        status_text.empty()
     
     # ==========================================
     # WYŚWIETLANIE WYNIKÓW
     # ==========================================
-    if 'processed_video_path' in st.session_state:
+    if 'processed_video_path' in st.session_state and st.session_state.get('file_key') == file_key:
         st.success("✅ Wideo przetworzone!")
         
         # Metryki
@@ -382,3 +387,4 @@ if uploaded_file:
                 os.remove(st.session_state.processed_video_path)
             del st.session_state.processed_video_path
             st.experimental_rerun()
+
