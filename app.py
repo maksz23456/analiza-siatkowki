@@ -321,23 +321,52 @@ if uploaded_file:
         # Kontrolki odtwarzania
         st.subheader("🎬 Odtwarzanie")
         
-        frame_idx = st.slider(
-            "Klatka",
+        # Inicjalizacja stanu odtwarzania
+        if 'current_frame' not in st.session_state:
+            st.session_state.current_frame = 0
+        if 'is_playing' not in st.session_state:
+            st.session_state.is_playing = False
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        if col1.button("⏮️ Początek"):
+            st.session_state.current_frame = 0
+            st.session_state.is_playing = False
+        
+        if col2.button("◀️ -10"):
+            st.session_state.current_frame = max(0, st.session_state.current_frame - 10)
+            st.session_state.is_playing = False
+        
+        # Play/Pause
+        if st.session_state.is_playing:
+            if col3.button("⏸️ Pauza"):
+                st.session_state.is_playing = False
+        else:
+            if col3.button("▶️ Play"):
+                st.session_state.is_playing = True
+        
+        if col4.button("▶️ +10"):
+            st.session_state.current_frame = min(len(frames_data) - 1, st.session_state.current_frame + 10)
+            st.session_state.is_playing = False
+        
+        if col5.button("⏭️ Koniec"):
+            st.session_state.current_frame = len(frames_data) - 1
+            st.session_state.is_playing = False
+        
+        # Suwak (tylko do manualnego wyboru)
+        manual_frame = st.slider(
+            "Klatka (możesz przewinąć ręcznie)",
             0,
             len(frames_data) - 1,
-            0,
-            label_visibility="collapsed"
+            st.session_state.current_frame
         )
         
-        col1, col2, col3, col4 = st.columns(4)
-        if col1.button("⏮️ Początek"):
-            frame_idx = 0
-        if col2.button("◀️ -10 klatek"):
-            frame_idx = max(0, frame_idx - 10)
-        if col3.button("▶️ +10 klatek"):
-            frame_idx = min(len(frames_data) - 1, frame_idx + 10)
-        if col4.button("⏭️ Koniec"):
-            frame_idx = len(frames_data) - 1
+        # Jeśli użytkownik przewinął suwak - zatrzymaj autoplay
+        if manual_frame != st.session_state.current_frame:
+            st.session_state.current_frame = manual_frame
+            st.session_state.is_playing = False
+        
+        frame_idx = st.session_state.current_frame
         
         # Pobierz aktualną klatkę
         current_data = frames_data[frame_idx]
@@ -401,6 +430,17 @@ if uploaded_file:
         
         # Wyświetl
         st.image(cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB), use_column_width=True)
+        
+        # Auto-advance jeśli odtwarzanie jest włączone
+        if st.session_state.is_playing:
+            if st.session_state.current_frame < len(frames_data) - 1:
+                st.session_state.current_frame += 1
+                import time
+                time.sleep(1.0 / fps)  # Opóźnienie odpowiadające FPS
+                st.experimental_rerun()
+            else:
+                # Koniec filmu - zatrzymaj
+                st.session_state.is_playing = False
         
         # Wykres wysokości
         st.subheader("📊 Wykres wysokości skoku w czasie")
