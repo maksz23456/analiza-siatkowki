@@ -218,9 +218,27 @@ if page == "📊 Nowa Analiza":
                 max_ball_speed = 0
                 all_ball_positions = []
                 
-                # Klatki kluczowe do zapisu
-                key_frames = []
-                frame_interval = max(1, total_frames // 20)  # Max 20 klatek
+                # Przygotuj wyjściowe wideo
+                output_path = tempfile.mktemp(suffix='.mp4')
+                
+                # KLUCZOWE: Użyj właściwego kodeka
+                # Najpierw sprawdź wymiary pierwszej klatki
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret, first_frame = cap.read()
+                
+                if rotation > 0:
+                    first_frame = rotate_image(first_frame, rotation)
+                
+                original_h, original_w = first_frame.shape[:2]
+                target_w = 640
+                target_h = int(original_h * (target_w / original_w))
+                
+                # VideoWriter z mp4v (najprostszy, najbardziej kompatybilny)
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                out = cv2.VideoWriter(output_path, fourcc, fps, (target_w, target_h))
+                
+                # Reset do początku
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 
                 with mp_pose.Pose(
                     min_detection_confidence=0.5,
@@ -374,9 +392,8 @@ if page == "📊 Nowa Analiza":
                         cv2.putText(display_frame, f"Wysokosc: {current_height_m:.2f}m", 
                                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                         
-                        # Zapisz kluczowe klatki
-                        if frame_id % frame_interval == 0:
-                            key_frames.append(display_frame.copy())
+                        # Zapisz klatkę do wideo
+                        out.write(display_frame)
                         
                         # Progress
                         progress = frame_id / total_frames
@@ -387,6 +404,7 @@ if page == "📊 Nowa Analiza":
                     status_text.success("✅ Analiza zakończona!")
                 
                 cap.release()
+                out.release()  # WAŻNE: zamknij VideoWriter
                 
                 # Oblicz metryki
                 if height_data:
@@ -422,14 +440,17 @@ if page == "📊 Nowa Analiza":
                         status = "🟢 W POLU" if ball_in_court else "🔴 AUT"
                         col3.metric("🎯 Lądowanie", status)
                     
-                    # Pokaż kluczowe klatki
-                    st.subheader("📸 Kluczowe momenty")
-                    cols = st.columns(min(len(key_frames), 4))
-                    for idx, (col, frame) in enumerate(zip(cols, key_frames[:4])):
-                        with col:
-                            st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), 
-                                    caption=f"Klatka {idx+1}", 
-                                    use_column_width=True)
+                    # ODTWARZANIE PEŁNEGO WIDEO
+                    st.subheader("🎬 Wideo z analizą")
+                    
+                    # Sprawdź czy plik istnieje i ma rozmiar
+                    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                        # Odczytaj plik i wyświetl przez st.video
+                        with open(output_path, 'rb') as video_file:
+                            video_bytes = video_file.read()
+                            st.video(video_bytes)
+                    else:
+                        st.error("⚠️ Nie udało się zapisać wideo. Spróbuj ponownie.")
                     
                     # Wykres
                     if height_data:
