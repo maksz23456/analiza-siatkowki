@@ -266,7 +266,9 @@ if uploaded_file:
                             cv2.line(display_frame, all_ball_positions[i-1], all_ball_positions[i], 
                                     (255, 255, 0), 3)
                     
-                    if ball_info and should_analyze:
+                    # Rysuj aktualną pozycję piłki (jeśli wykryto)
+                    if ball_info:
+                        bx, by, br = ball_info
                         cv2.circle(display_frame, (bx, by), br, (0, 255, 255), 3)
                     
                     if ball_hit_point:
@@ -387,6 +389,4 @@ if uploaded_file:
                     'Wysokość (m)': df['height_m']
                 })
                 st.line_chart(chart_data.set_index('Czas (s)'))
-
-
 
