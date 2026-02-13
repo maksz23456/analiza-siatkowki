@@ -1,30 +1,23 @@
 import streamlit as st
 import cv2
 import numpy as np
-import os
+import tempfile
 
 # ==========================================
-# PANCERNY IMPORT MEDIAPIPE
+# IMPORT MEDIAPIPE
 # ==========================================
 mp_pose = None
 mp_drawing = None
 
 try:
     import mediapipe as mp
-    # Próba dostępu do modułów w sposób bezpośredni
-    if hasattr(mp, 'solutions'):
-        mp_pose = mp.solutions.pose
-        mp_drawing = mp.solutions.drawing_utils
-    else:
-        # Alternatywna ścieżka dla problematycznych instalacji
-        import mediapipe.python.solutions.pose as mp_pose
-        import mediapipe.python.solutions.drawing_utils as mp_drawing
+    mp_pose = mp.solutions.pose
+    mp_drawing = mp.solutions.drawing_utils
 except Exception as e:
     st.error(f"⚠️ Błąd krytyczny MediaPipe: {e}")
-    st.info("Twoja wersja Pythona (3.14) może nie być wspierana. Spróbuj zainstalować: python -m pip install mediapipe")
 
 # ==========================================
-# RESZTA KODU
+# INTERFEJS
 # ==========================================
 st.title("🏐 Analiza Skoku AI")
 
@@ -32,36 +25,56 @@ if mp_pose is None:
     st.warning("Aplikacja nie może wystartować bez biblioteki MediaPipe.")
 else:
     st.success("MediaPipe załadowane pomyślnie!")
-    # Tutaj wstaw resztę logiki z VolleyballAnalyzer
-  # Panel do wgrywania filmu
-    uploaded_file = st.file_uploader("Wgraj nagranie swojego skoku (MP4, MOV)", type=['mp4', 'mov'])
+
+    uploaded_file = st.file_uploader(
+        "Wgraj nagranie swojego skoku (MP4, MOV)",
+        type=["mp4", "mov"]
+    )
 
     if uploaded_file:
-        # Prowizoryczne zapisanie pliku, aby OpenCV mógł go odczytać
-        import tempfile
+
+        # Zapis pliku tymczasowego
         tfile = tempfile.NamedTemporaryFile(delete=False)
         tfile.write(uploaded_file.read())
+        tfile.close()
 
         cap = cv2.VideoCapture(tfile.name)
         stframe = st.empty()
 
-        # Inicjalizacja modelu Pose
-        with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
+        with mp_pose.Pose(
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        ) as pose:
+
+            frame_id = 0  # do kontrolowania FPS w Cloud
             while cap.isOpened():
                 ret, frame = cap.read()
-                if not ret:
+                if not ret or frame is None:
                     break
 
-                # Konwersja kolorów dla MediaPipe
-                image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = pose.process(image)
+                frame_id += 1
 
-                # Rysowanie punktów (nadgarstki 15, 16 oraz kostki 27, 28)
+                # 🔹 Przetwarzaj co 2 klatkę, aby Cloud nie crashował
+                if frame_id % 2 != 0:
+                    continue
+
+                # Zmniejszenie rozdzielczości (wydajność w Streamlit Cloud)
+                frame = cv2.resize(frame, (640, 360))
+
+                # Konwersja do RGB dla MediaPipe
+                image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = pose.process(image_rgb)
+
+                # Rysowanie punktów
                 if results.pose_landmarks:
                     mp_drawing.draw_landmarks(
-                        frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+                        frame,
+                        results.pose_landmarks,
+                        mp_pose.POSE_CONNECTIONS
+                    )
 
-                # Wyświetlanie przetworzonej klatki w Streamlit
-                stframe.image(frame, channels="BGR", use_container_width=True)
+                # 🔥 Wyświetlanie w Streamlit (tylko RGB)
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                stframe.image(rgb_frame)
 
         cap.release()
